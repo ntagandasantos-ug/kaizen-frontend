@@ -2,7 +2,16 @@
 // This replaces every window.storage.get/set call from the artifact version
 // with real requests to your deployed backend.
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
+
+if (!API_BASE && typeof window !== "undefined") {
+  // Loud, obvious warning instead of every request silently failing with a
+  // vague "Failed to fetch" — this is the #1 cause of "uploads don't work."
+  console.warn(
+    "[kaizen] VITE_API_BASE is not set. Every API call will fail. " +
+    "Add VITE_API_BASE=https://your-backend-url to your .env file and restart the dev server."
+  );
+}
 
 function getToken() {
   return localStorage.getItem("kaizen_token");
@@ -13,15 +22,28 @@ function setToken(token) {
 }
 
 async function request(path, options = {}) {
+  if (!API_BASE) {
+    throw new Error("Backend URL is not configured. Set VITE_API_BASE in your frontend's .env file.");
+  }
   const token = getToken();
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+  } catch (err) {
+    // The browser's generic "Failed to fetch" almost always means either:
+    // the backend is unreachable/asleep, or CORS is blocking the request.
+    throw new Error(
+      `Could not reach the backend at ${API_BASE}${path}. ` +
+      `Check that the backend is running and that CORS_ORIGIN on the backend matches this site's URL. (${err.message})`
+    );
+  }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error(data?.error || `Request failed: ${res.status}`);
@@ -81,6 +103,9 @@ export const audits = {
   rankings: (year) => request(`/api/audits/rankings?year=${year}`),
   monthlyWinners: (year) => request(`/api/audits/monthly-winners?year=${year}`),
   submitScore: (payload) => request("/api/audits", { method: "PUT", body: JSON.stringify(payload) }),
+  // Gets-or-creates an audit row for a department+month with no score yet —
+  // lets media get uploaded before a score is entered.
+  ensure: (department_id, month) => request("/api/audits/ensure", { method: "POST", body: JSON.stringify({ department_id, month }) }),
 };
 
 /* --------------------------- Events ------------------------------ */
@@ -109,12 +134,27 @@ async function uploadMedia({ category, entityId, file }) {
     }),
   });
 
-  const putRes = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: { "Content-Type": file.type },
-    body: file,
-  });
-  if (!putRes.ok) throw new Error("Upload to storage failed.");
+  let putRes;
+  try {
+    putRes = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": file.type },
+      body: file,
+    });
+  } catch (err) {
+    // This specific fetch — straight to R2/S3, not your own backend — is the
+    // one that fails when the bucket's CORS policy hasn't been configured.
+    // Your backend's CORS_ORIGIN setting has no effect on this request at all.
+    throw new Error(
+      "Upload to storage failed before it could even start. This almost always means your " +
+      "R2/S3 bucket doesn't have a CORS policy allowing uploads from this website. " +
+      "In Cloudflare: R2 → your bucket → Settings → CORS Policy → add this site's URL " +
+      `with PUT and GET methods allowed. (${err.message})`
+    );
+  }
+  if (!putRes.ok) {
+    throw new Error(`Upload to storage failed (HTTP ${putRes.status}). Double-check your R2/S3 credentials and bucket name.`);
+  }
 
   await request("/api/media/confirm", {
     method: "POST",
@@ -131,6 +171,7 @@ export const media = {
   uploadLogo: (file) => uploadMedia({ category: "site", file }),
 
   listForAudit: (auditId) => request(`/api/media/audit/${auditId}`),
+  listAll: (year) => request(`/api/media${year ? `?year=${year}` : ""}`),
   currentWinnerMedia: () => request("/api/audits/current-winner-media"),
   viewUrl: (id) => request(`/api/media/${id}/view-url`),
   remove: (id) => request(`/api/media/${id}`, { method: "DELETE" }),

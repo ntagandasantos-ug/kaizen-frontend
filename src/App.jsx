@@ -7,7 +7,7 @@ import {
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
-import { LeadershipFlipCard, WinnersMarquee } from "./HomeSections";
+import { LeadershipFlipCard, WinnersMarquee, GalleryMarquee } from "./HomeSections";
 import {
   auth, departments as departmentsApi, committee as committeeApi,
   audits as auditsApi, events as eventsApi, media, settings as settingsApi,
@@ -34,13 +34,6 @@ const VALUES = [
   { icon: ClipboardCheck, title: "Transparency", text: "Every score, win, and miss is visible to everyone, always." },
   { icon: Star, title: "Excellence", text: "We aim past the pass mark — 80% is the floor, not the target." },
   { icon: ShieldCheck, title: "Safety First", text: "No score outweighs a safe floor, safe process, safe person." },
-];
-
-const GALLERY_ITEMS = [
-  { month: "Jun", dept: "Quality Assurance", type: "Photo", event: "6S Audit" },
-  { month: "Jun", dept: "Logistics & Warehouse", type: "Video", event: "6S Audit" },
-  { month: "May", dept: "Engineering", type: "Photo", event: "6S Audit" },
-  { month: "May", dept: "All Departments", type: "Photo", event: "Award Ceremony" },
 ];
 
 /* ================================ HELPERS ==================================== */
@@ -89,7 +82,7 @@ function Modal({ title, onClose, children }) {
 
 // A small reusable image-upload button. Shows a spinner while uploading,
 // then hands the resulting URL back via onUploaded.
-function PhotoUploadButton({ label, onUploaded, uploadFn }) {
+function PhotoUploadButton({ label, onUploaded, uploadFn, accept = "image/*" }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   return (
@@ -99,7 +92,7 @@ function PhotoUploadButton({ label, onUploaded, uploadFn }) {
         {uploading ? "Uploading…" : label}
         <input
           type="file"
-          accept="image/*"
+          accept={accept}
           className="hidden"
           disabled={uploading}
           onChange={async (e) => {
@@ -268,7 +261,7 @@ function Scoreboard({ standings, latestMonthLabel }) {
   );
 }
 
-function Home({ setActive, standings, latestMonthLabel, departments, siteSettings }) {
+function Home({ setActive, standings, latestMonthLabel, departments, siteSettings, editing }) {
   const topDept = standings[0] || { dept: "—", monthsScored: 0 };
   return (
     <div>
@@ -313,12 +306,15 @@ function Home({ setActive, standings, latestMonthLabel, departments, siteSetting
         <SectionEyebrow>From our leadership</SectionEyebrow>
         <h2 className="text-3xl font-bold mb-6" style={{ color: C.ink, ...fontDisplay }}>A MESSAGE TO THE COMPANY</h2>
         {/* Pulls chairperson/patron name, role, photo, and message straight
-            from the live database and flips between them continuously. */}
-        <LeadershipFlipCard colors={C} />
+            from the live database. In admin mode it becomes editable inline. */}
+        <LeadershipFlipCard colors={C} editing={editing} />
       </section>
 
       {/* Continuous horizontal scroll of this month's winning department's photos/videos */}
       <WinnersMarquee colors={C} />
+
+      {/* Continuous horizontal scroll of recent uploads across every department */}
+      <GalleryMarquee colors={C} />
 
       <section className="max-w-6xl mx-auto px-5 py-16 grid md:grid-cols-2 gap-8">
         <div className="p-7 rounded-lg border" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
@@ -485,10 +481,27 @@ function ScoreBar({ label, value }) {
     </div>
   );
 }
-function PerformanceCard({ dept, score, monthLabel, editing, onScoreChange, auditId }) {
+function PerformanceCard({ dept, score, monthLabel, editing, onScoreChange, auditId, onEnsureAudit }) {
   const [open, setOpen] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const hasScore = score !== null && score !== undefined;
   const passed = hasScore && score >= 80;
+
+  // If no audit row exists yet for this department+month (i.e. it hasn't
+  // been scored), create one on the fly so the file has somewhere to attach.
+  const uploadFile = async (file) => {
+    let id = auditId;
+    if (!id) {
+      try {
+        id = await onEnsureAudit();
+      } catch (err) {
+        setUploadError(err.message || "Couldn't prepare this audit for upload.");
+        throw err;
+      }
+    }
+    return media.uploadAuditFile(id, file);
+  };
+
   return (
     <div className="rounded-lg border overflow-hidden" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
       <div className="p-5">
@@ -507,12 +520,16 @@ function PerformanceCard({ dept, score, monthLabel, editing, onScoreChange, audi
           {hasScore ? (passed ? <Badge tone="green"><CheckCircle2 size={12} className="inline -mt-0.5 mr-1" />Above 80%</Badge> : <Badge tone="brick"><XCircle size={12} className="inline -mt-0.5 mr-1" />Below 80%</Badge>) : <Badge>Not yet audited</Badge>}
           <Badge><Camera size={12} className="inline -mt-0.5 mr-1" />Photos</Badge><Badge><Video size={12} className="inline -mt-0.5 mr-1" />Video</Badge><Badge><FileText size={12} className="inline -mt-0.5 mr-1" />Report</Badge>
         </div>
-        {editing && auditId && (
-          <PhotoUploadButton
-            label="Upload audit photo/video/report"
-            uploadFn={(file) => media.uploadAuditFile(auditId, file)}
-            onUploaded={() => { /* file is saved server-side; gallery/marquee picks it up automatically */ }}
-          />
+        {editing && (
+          <>
+            <PhotoUploadButton
+              label="Upload photo, video, or report"
+              accept="image/*,video/*,application/pdf"
+              uploadFn={uploadFile}
+              onUploaded={() => setUploadError("")}
+            />
+            {uploadError && <p className="text-xs mt-1" style={{ color: C.brick }}>{uploadError}</p>}
+          </>
         )}
         {hasScore && <button onClick={() => setOpen(!open)} className="mt-3 text-xs font-semibold" style={{ color: C.amberDeep }}>{open ? "Hide 6S breakdown ▲" : "View 6S breakdown ▼"}</button>}
       </div>
@@ -520,7 +537,7 @@ function PerformanceCard({ dept, score, monthLabel, editing, onScoreChange, audi
     </div>
   );
 }
-function Performance({ scores, auditIds, departments, editing, onSaveScore }) {
+function Performance({ scores, auditIds, departments, editing, onSaveScore, onEnsureAudit }) {
   const [monthIdx, setMonthIdx] = useState(() => {
     const idx = MONTHS.findIndex((_, i) => departments.every((d) => scores[d]?.[i] === null || scores[d]?.[i] === undefined));
     return idx === -1 ? 11 : Math.max(0, idx - 1);
@@ -543,7 +560,7 @@ function Performance({ scores, auditIds, departments, editing, onSaveScore }) {
     <div className="max-w-6xl mx-auto px-5 py-14">
       <SectionEyebrow>Monthly department audits</SectionEyebrow>
       <h2 className="text-3xl font-bold mb-2" style={{ color: C.ink, ...fontDisplay }}>PERFORMANCE</h2>
-      <p className="text-sm mb-6 max-w-2xl" style={{ color: C.slate }}>Every department's 6S and safety score, with supporting photos, video, and written reports from the audit. Scores save to the database as soon as you finish typing.</p>
+      <p className="text-sm mb-6 max-w-2xl" style={{ color: C.slate }}>Every department's 6S and safety score, with supporting photos, video, and written reports from the audit. Scores save to the database as soon as you finish typing, and you can upload media before or after scoring.</p>
       <div className="flex flex-wrap items-center gap-3 mb-8">
         <select value={monthIdx} onChange={(e) => setMonthIdx(Number(e.target.value))} className="px-3 py-2 rounded border text-sm" style={{ ...inputStyle, ...fontMono }}>{MONTHS.map((m, i) => <option key={m} value={i}>{m} {CURRENT_YEAR}</option>)}</select>
         <select value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)} className="px-3 py-2 rounded border text-sm" style={{ ...inputStyle, ...fontMono }}><option>All</option>{departments.map((d) => <option key={d}>{d}</option>)}</select>
@@ -559,6 +576,7 @@ function Performance({ scores, auditIds, departments, editing, onSaveScore }) {
             editing={editing}
             onScoreChange={(v) => setScore(c.dept, v)}
             auditId={auditIds?.[c.dept]?.[monthIdx]}
+            onEnsureAudit={() => onEnsureAudit(c.dept, monthIdx)}
           />
         ))}
       </div>
@@ -682,23 +700,123 @@ function Rankings({ standings, monthlyWinners }) {
 }
 
 /* ================================= GALLERY =================================== */
-function iconFor(type) { if (type === "Photo") return Camera; if (type === "Video") return Video; return FileText; }
-function GalleryTile({ item }) {
-  const Icon = iconFor(item.type);
+function iconFor(type) { if (type === "photo") return Camera; if (type === "video") return Video; return FileText; }
+function GalleryTile({ item, editing, onDelete }) {
+  const Icon = iconFor(item.file_type);
+  const monthLabel = MONTHS[new Date(item.month).getUTCMonth()];
   return (
-    <div className="rounded-lg border overflow-hidden" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
-      <div className="h-32 flex flex-col items-center justify-center gap-2" style={{ backgroundColor: "#E9EAE3" }}><Icon size={26} color={C.slate} /><span className="text-[11px] uppercase tracking-wide" style={{ color: C.slate, ...fontMono }}>{item.type} placeholder</span></div>
-      <div className="p-3"><div className="text-sm font-semibold" style={{ color: C.ink }}>{item.dept}</div><div className="text-xs mt-0.5" style={{ color: C.slate }}>{item.event} · {item.month} {CURRENT_YEAR}</div></div>
+    <div className="rounded-lg border overflow-hidden relative" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
+      {editing && (
+        <button
+          onClick={onDelete}
+          className="absolute top-2 right-2 z-10 p-1.5 rounded-full"
+          style={{ backgroundColor: "rgba(15,39,64,0.85)", color: C.brick }}
+          title="Delete this file"
+        >
+          <Trash2 size={13} />
+        </button>
+      )}
+      <div className="h-32 flex items-center justify-center" style={{ backgroundColor: "#1a2f45" }}>
+        {item.file_type === "photo" ? (
+          <img src={item.file_url} alt={item.department} className="w-full h-full object-cover" loading="lazy" />
+        ) : item.file_type === "video" ? (
+          <video src={item.file_url} className="w-full h-full object-cover" muted />
+        ) : (
+          <a href={item.file_url} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1" style={{ color: C.cream }}>
+            <Icon size={26} /><span className="text-[11px] uppercase tracking-wide" style={fontMono}>Open report</span>
+          </a>
+        )}
+      </div>
+      <div className="p-3">
+        <div className="text-sm font-semibold" style={{ color: C.ink }}>{item.department}</div>
+        <div className="text-xs mt-0.5 flex items-center gap-1" style={{ color: C.slate }}>
+          <Icon size={11} /> {item.file_type} · {monthLabel} {CURRENT_YEAR}
+        </div>
+      </div>
     </div>
   );
 }
-function Gallery() {
+function GalleryUploadPanel({ departments, deptIdByName, onEnsureAudit, onUploaded }) {
+  const [deptName, setDeptName] = useState(departments[0] || "");
+  const [monthIdx, setMonthIdx] = useState(new Date().getMonth());
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !deptName) return;
+    setUploading(true); setError("");
+    try {
+      const auditId = await onEnsureAudit(deptName, monthIdx);
+      await media.uploadAuditFile(auditId, file);
+      onUploaded();
+    } catch (err) {
+      setError(err.message || "Upload failed.");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  return (
+    <div className="rounded-lg border p-5 mb-8 flex flex-wrap items-end gap-3" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
+      <div>
+        <FieldLabel>Department</FieldLabel>
+        <select value={deptName} onChange={(e) => setDeptName(e.target.value)} className="border rounded px-2 py-1.5 text-sm" style={inputStyle}>
+          {departments.map((d) => <option key={d}>{d}</option>)}
+        </select>
+      </div>
+      <div>
+        <FieldLabel>Month</FieldLabel>
+        <select value={monthIdx} onChange={(e) => setMonthIdx(Number(e.target.value))} className="border rounded px-2 py-1.5 text-sm" style={inputStyle}>
+          {MONTHS.map((m, i) => <option key={m} value={i}>{m} {CURRENT_YEAR}</option>)}
+        </select>
+      </div>
+      <label className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-semibold cursor-pointer" style={{ backgroundColor: C.navy, color: C.cream }}>
+        {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+        {uploading ? "Uploading…" : "Add photo, video, or report"}
+        <input type="file" accept="image/*,video/*,application/pdf" className="hidden" disabled={uploading} onChange={handleFile} />
+      </label>
+      {error && <p className="text-xs w-full" style={{ color: C.brick }}>{error}</p>}
+    </div>
+  );
+}
+
+function Gallery({ editing, departments, deptIdByName, onEnsureAudit }) {
+  const [items, setItems] = useState(null);
+  const [error, setError] = useState("");
+
+  const load = () => {
+    media.listAll(CURRENT_YEAR).then(setItems).catch((err) => setError(err.message));
+  };
+  useEffect(load, []);
+
+  const handleDelete = async (id) => {
+    await media.remove(id);
+    setItems(items.filter((i) => i.id !== id));
+  };
+
   return (
     <div className="max-w-6xl mx-auto px-5 py-14">
       <SectionEyebrow>Every audit, in view</SectionEyebrow>
       <h2 className="text-3xl font-bold mb-2" style={{ color: C.ink, ...fontDisplay }}>GALLERY</h2>
-      <p className="text-sm mb-8 max-w-2xl" style={{ color: C.slate }}>Photos, videos, and reports from audits and ceremonies. Upload real media from the Performance page as each audit happens.</p>
-      <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-5">{GALLERY_ITEMS.map((it, i) => <GalleryTile key={i} item={it} />)}</div>
+      <p className="text-sm mb-6 max-w-2xl" style={{ color: C.slate }}>Real photos, videos, and reports uploaded from any department, most recent first.</p>
+      {editing && (
+        <GalleryUploadPanel
+          departments={departments}
+          deptIdByName={deptIdByName}
+          onEnsureAudit={onEnsureAudit}
+          onUploaded={load}
+        />
+      )}
+      {error && <p className="text-sm mb-4" style={{ color: C.brick }}>Couldn't load the gallery: {error}</p>}
+      {!items && !error && <p className="text-sm" style={{ color: C.slate }}>Loading…</p>}
+      {items && items.length === 0 && <p className="text-sm" style={{ color: C.slate }}>No media uploaded yet this year — use the panel above (or the Performance page) to add photos, videos, or reports.</p>}
+      {items && items.length > 0 && (
+        <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-5">
+          {items.map((it) => <GalleryTile key={it.id} item={it} editing={editing} onDelete={() => handleDelete(it.id)} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -909,6 +1027,21 @@ export default function App() {
     }
   };
 
+  // Creates (or fetches, if it already exists) an audit row for a department+month
+  // that hasn't been scored yet, so a photo/video/report has something to attach
+  // to. Returns the audit id and updates local state so PerformanceCard's next
+  // render has it too, without waiting for a full refetch.
+  const handleEnsureAudit = async (deptName, monthIdx) => {
+    const monthStr = `${CURRENT_YEAR}-${String(monthIdx + 1).padStart(2, "0")}-01`;
+    const audit = await auditsApi.ensure(deptIdByName[deptName], monthStr);
+    setAuditIds((prev) => {
+      const next = { ...prev, [deptName]: [...(prev[deptName] || pad([]))] };
+      next[deptName][monthIdx] = audit.id;
+      return next;
+    });
+    return audit.id;
+  };
+
   /* ---------------------------------- Auth ------------------------------------ */
   const handleEditClick = () => { if (editing) setEditing(false); else if (authed) setEditing(true); else { setLoginError(""); setShowLogin(true); } };
   const handleLogin = async (email, pw) => {
@@ -957,15 +1090,15 @@ export default function App() {
           />
         );
       case "performance":
-        return <Performance scores={scores} auditIds={auditIds} departments={departments} editing={editing} onSaveScore={handleSaveScore} />;
+        return <Performance scores={scores} auditIds={auditIds} departments={departments} editing={editing} onSaveScore={handleSaveScore} onEnsureAudit={handleEnsureAudit} />;
       case "calendar":
         return <CalendarSection events={events} departments={departments} editing={editing} onAddEvent={handleAddEvent} onRemoveEvent={handleRemoveEvent} />;
       case "rankings":
         return <Rankings standings={standings} monthlyWinners={monthlyWinners} />;
       case "gallery":
-        return <Gallery />;
+        return <Gallery editing={editing} departments={departments} deptIdByName={deptIdByName} onEnsureAudit={handleEnsureAudit} />;
       default:
-        return <Home setActive={setActive} standings={standings} latestMonthLabel={latestMonthLabel} departments={departments} siteSettings={siteSettings} />;
+        return <Home setActive={setActive} standings={standings} latestMonthLabel={latestMonthLabel} departments={departments} siteSettings={siteSettings} editing={editing} />;
     }
   }, [active, committeeLead, auditors, scores, auditIds, events, editing, standings, monthlyWinners, latestMonthLabel, departments, siteSettings]);
 
