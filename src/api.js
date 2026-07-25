@@ -91,6 +91,8 @@ export const committee = {
   create: (member) => request("/api/committee", { method: "POST", body: JSON.stringify(member) }),
   update: (id, patch) => request(`/api/committee/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   remove: (id) => request(`/api/committee/${id}`, { method: "DELETE" }),
+  // Bulk-applies a new hierarchy order in one request: [{ id, sort_order }, ...]
+  reorder: (order) => request("/api/committee/reorder", { method: "POST", body: JSON.stringify({ order }) }),
 };
 
 /* --------------------------- Audits ------------------------------ */
@@ -115,6 +117,7 @@ export const events = {
     return request(`/api/events${params}`);
   },
   create: (event) => request("/api/events", { method: "POST", body: JSON.stringify(event) }),
+  update: (id, patch) => request(`/api/events/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   remove: (id) => request(`/api/events/${id}`, { method: "DELETE" }),
 };
 
@@ -175,6 +178,42 @@ export const media = {
   currentWinnerMedia: () => request("/api/audits/current-winner-media"),
   viewUrl: (id) => request(`/api/media/${id}/view-url`),
   remove: (id) => request(`/api/media/${id}`, { method: "DELETE" }),
+};
+
+/* ------------------------- Independent Gallery ---------------------- */
+// A general, department-independent gallery — separate table, separate
+// route, on purpose. Uploading here never asks for a department or month.
+export const gallery = {
+  list: () => request("/api/gallery"),
+  remove: (id) => request(`/api/gallery/${id}`, { method: "DELETE" }),
+  async upload(file, caption) {
+    const { uploadUrl, key, fileUrl, fileType } = await request("/api/media/upload-url", {
+      method: "POST",
+      body: JSON.stringify({
+        category: "gallery",
+        fileName: file.name,
+        contentType: file.type,
+        fileSizeBytes: file.size,
+      }),
+    });
+
+    let putRes;
+    try {
+      putRes = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Type": file.type }, body: file });
+    } catch (err) {
+      throw new Error(
+        "Upload to storage failed before it could even start. This almost always means your " +
+        "R2/S3 bucket doesn't have a CORS policy allowing uploads from this website. " +
+        `(${err.message})`
+      );
+    }
+    if (!putRes.ok) throw new Error(`Upload to storage failed (HTTP ${putRes.status}).`);
+
+    return request("/api/gallery/confirm", {
+      method: "POST",
+      body: JSON.stringify({ key, fileUrl, fileType, fileSizeBytes: file.size, caption: caption || null }),
+    });
+  },
 };
 
 /* --------------------------- Site Settings ------------------------- */

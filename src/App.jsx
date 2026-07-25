@@ -11,6 +11,7 @@ import { LeadershipFlipCard, WinnersMarquee, GalleryMarquee } from "./HomeSectio
 import {
   auth, departments as departmentsApi, committee as committeeApi,
   audits as auditsApi, events as eventsApi, media, settings as settingsApi,
+  gallery as galleryApi,
 } from "./api";
 
 /* ============================= DESIGN TOKENS ============================= */
@@ -38,6 +39,15 @@ const VALUES = [
 
 /* ================================ HELPERS ==================================== */
 const avatarUrl = (name) => `https://ui-avatars.com/api/?name=${encodeURIComponent(name || "Kaizen")}&background=0F2740&color=F2A93B&size=256&bold=true`;
+
+// Postgres DATE columns come back from the backend as full ISO timestamps
+// (e.g. "2026-08-10T00:00:00.000Z") once they pass through JSON.stringify.
+// Everywhere in the UI expects a plain "YYYY-MM-DD" string, so normalize here
+// once instead of re-deriving it in every place a date is read.
+function toDateOnly(v) {
+  if (!v) return null;
+  return typeof v === "string" ? v.slice(0, 10) : v;
+}
 
 function subScores(score, dept) {
   const seed = dept.length;
@@ -443,28 +453,48 @@ function DepartmentsManager({ departments, editing, onAdd, onRename, onRemove })
   );
 }
 
-function Committee({ committeeLead, auditors, departments, editing, onSaveLead, onSaveAuditors, onAddDept, onRenameDept, onRemoveDept }) {
-  const updateLead = (updated) => onSaveLead(committeeLead.map((p) => (p.id === updated.id ? updated : p)));
-  const updateAuditor = (updated) => onSaveAuditors(auditors.map((p) => (p.id === updated.id ? updated : p)));
-  const addAuditor = () => onSaveAuditors([...auditors, { id: `new-${Date.now()}`, name: "New Auditor", role: "Auditor", photo: "", attached: [] }]);
-  const removeAuditor = (id) => onSaveAuditors(auditors.filter((p) => p.id !== id));
+// Fixed display order for committee members. Roles are matched
+// case-insensitively; anything not on this list sorts to the end
+// (alphabetically among themselves), so extra auditors or one-off
+// titles still show up, just after Lead Auditor.
+const ROLE_HIERARCHY = [
+  "Patron", "Chairperson", "Secretary", "Asst. Secretary",
+  "Publicity", "Asst. Publicity", "Welfare", "Lead Auditor",
+];
+function hierarchyRank(role) {
+  const idx = ROLE_HIERARCHY.findIndex((r) => r.toLowerCase() === (role || "").trim().toLowerCase());
+  return idx === -1 ? ROLE_HIERARCHY.length : idx;
+}
+function sortByHierarchy(members) {
+  return [...members].sort((a, b) => {
+    const ra = hierarchyRank(a.role), rb = hierarchyRank(b.role);
+    if (ra !== rb) return ra - rb;
+    return (a.name || "").localeCompare(b.name || "");
+  });
+}
+// Roles containing "auditor" map to is_lead=false in the database (kept for
+// backend compatibility); every other listed role maps to is_lead=true.
+const isAuditorRole = (role) => /auditor/i.test(role || "");
+
+function Committee({ members, departments, editing, onSaveMembers, onAddDept, onRenameDept, onRemoveDept }) {
+  const updateMember = (updated) => onSaveMembers(members.map((p) => (p.id === updated.id ? updated : p)));
+  const addMember = () => onSaveMembers([...members, { id: `new-${Date.now()}`, name: "New Member", role: "", photo: "", attached: [] }]);
+  const removeMember = (id) => onSaveMembers(members.filter((p) => p.id !== id));
   return (
     <div className="max-w-6xl mx-auto px-5 py-14">
       <SectionEyebrow>Who runs the program</SectionEyebrow>
       <h2 className="text-3xl font-bold mb-2" style={{ color: C.ink, ...fontDisplay }}>KAIZEN COMMITTEE</h2>
-      <p className="text-sm mb-10 max-w-2xl" style={{ color: C.slate }}>Led by a patron, chairperson, deputy, and secretary, with auditors attached to specific departments to keep every audit consistent and accountable.</p>
-      <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-5 mb-12">
-        {committeeLead.map((p) => <PersonCard key={p.id} person={p} editing={editing} onChange={updateLead} removable={false} showAttached={false} departments={departments} />)}
-      </div>
+      <p className="text-sm mb-6 max-w-2xl" style={{ color: C.slate }}>Patron, Chairperson, Secretary, Asst. Secretary, Publicity, Asst. Publicity, Welfare, Lead Auditor — in that order.</p>
+      {editing && <p className="text-xs mb-6" style={{ color: C.slate }}>Type a role exactly as listed above to place someone correctly in the order. Unrecognized roles sort to the end.</p>}
 
       <DepartmentsManager departments={departments} editing={editing} onAdd={onAddDept} onRename={onRenameDept} onRemove={onRemoveDept} />
 
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-bold uppercase tracking-widest" style={{ color: C.slate, ...fontMono }}>Auditors & Their Departments</h3>
-        {editing && <button onClick={addAuditor} className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-semibold" style={{ backgroundColor: C.navy, color: C.cream }}><Plus size={13} /> Add auditor</button>}
+        <h3 className="text-sm font-bold uppercase tracking-widest" style={{ color: C.slate, ...fontMono }}>Committee Members</h3>
+        {editing && <button onClick={addMember} className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-semibold" style={{ backgroundColor: C.navy, color: C.cream }}><Plus size={13} /> Add member</button>}
       </div>
       <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-5">
-        {auditors.map((p) => <PersonCard key={p.id} person={p} editing={editing} onChange={updateAuditor} onRemove={() => removeAuditor(p.id)} removable showAttached departments={departments} />)}
+        {members.map((p) => <PersonCard key={p.id} person={p} editing={editing} onChange={updateMember} onRemove={() => removeMember(p.id)} removable showAttached departments={departments} />)}
       </div>
     </div>
   );
@@ -587,15 +617,31 @@ function Performance({ scores, auditIds, departments, editing, onSaveScore, onEn
 /* ================================ CALENDAR ================================== */
 function typeTone(type) { if (type === "Audit") return "navy"; if (type === "Ceremony") return "amber"; return "green"; }
 function EventRow({ e, editing, onRemove }) {
-  const d = new Date(e.date + "T00:00:00");
+  const start = new Date(e.date + "T00:00:00");
+  const end = e.endDate ? new Date(e.endDate + "T00:00:00") : null;
+  const isRange = end && e.endDate !== e.date;
   return (
     <div className="flex items-start gap-4 py-4" style={{ borderBottom: `1px solid ${C.hairline}` }}>
-      <div className="w-16 shrink-0 text-center rounded py-1.5" style={{ backgroundColor: C.navy, color: C.amber, ...fontMono }}>
-        <div className="text-xs uppercase">{d.toLocaleDateString("en-US", { month: "short" })}</div>
-        <div className="text-lg font-bold leading-none">{d.getDate()}</div>
+      <div className="w-20 shrink-0 text-center rounded py-1.5" style={{ backgroundColor: C.navy, color: C.amber, ...fontMono }}>
+        {isRange ? (
+          <>
+            <div className="text-xs uppercase">{start.toLocaleDateString("en-US", { month: "short" })}</div>
+            <div className="text-base font-bold leading-none">{start.getDate()}–{end.getDate()}</div>
+          </>
+        ) : (
+          <>
+            <div className="text-xs uppercase">{start.toLocaleDateString("en-US", { month: "short" })}</div>
+            <div className="text-lg font-bold leading-none">{start.getDate()}</div>
+          </>
+        )}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-sm" style={{ color: C.ink }}>{e.title}</span><Badge tone={typeTone(e.type)}>{e.type}</Badge></div>
+        {isRange && (
+          <div className="mt-0.5 text-xs" style={{ color: C.amberDeep, ...fontMono }}>
+            {start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} → {end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </div>
+        )}
         <div className="mt-1 text-xs flex items-center gap-1 flex-wrap" style={{ color: C.slate }}><MapPin size={12} /> {e.depts.join(", ")}<span className="mx-1">·</span><Users size={12} /> {e.auditor}</div>
       </div>
       {editing && <button onClick={onRemove} style={{ color: C.brick }}><Trash2 size={15} /></button>}
@@ -603,29 +649,39 @@ function EventRow({ e, editing, onRemove }) {
   );
 }
 function CalendarSection({ events, departments, editing, onAddEvent, onRemoveEvent }) {
-  const [form, setForm] = useState({ date: "", title: "", depts: "", auditor: "", type: "Audit" });
+  const [form, setForm] = useState({ date: "", endDate: "", title: "", depts: "", auditor: "", type: "Audit" });
+  const [formError, setFormError] = useState("");
   const sorted = [...events].sort((a, b) => a.date.localeCompare(b.date));
   const addEvent = () => {
     if (!form.date || !form.title) return;
-    onAddEvent({ date: form.date, title: form.title, depts: form.depts.split(",").map((s) => s.trim()).filter(Boolean), auditor: form.auditor || "—", type: form.type });
-    setForm({ date: "", title: "", depts: "", auditor: "", type: "Audit" });
+    if (form.endDate && form.endDate < form.date) {
+      setFormError("End date can't be before the start date.");
+      return;
+    }
+    setFormError("");
+    onAddEvent({ date: form.date, endDate: form.endDate || null, title: form.title, depts: form.depts.split(",").map((s) => s.trim()).filter(Boolean), auditor: form.auditor || "—", type: form.type });
+    setForm({ date: "", endDate: "", title: "", depts: "", auditor: "", type: "Audit" });
   };
   return (
     <div className="max-w-6xl mx-auto px-5 py-14">
       <SectionEyebrow>What's coming up</SectionEyebrow>
       <h2 className="text-3xl font-bold mb-2" style={{ color: C.ink, ...fontDisplay }}>CALENDAR & EVENTS</h2>
-      <p className="text-sm mb-8 max-w-2xl" style={{ color: C.slate }}>Upcoming audit dates, activities, and ceremonies — with the auditor assigned to each department.</p>
+      <p className="text-sm mb-8 max-w-2xl" style={{ color: C.slate }}>Upcoming audit dates, activities, and ceremonies — with the auditor assigned to each department. Multi-day events show as a date range.</p>
       {editing && (
-        <div className="rounded-lg border p-5 mb-8 grid sm:grid-cols-2 md:grid-cols-5 gap-3" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
-          <div><FieldLabel>Date</FieldLabel><input type="date" className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
-          <div><FieldLabel>Title</FieldLabel><input className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
-          <div><FieldLabel>Departments (comma-separated)</FieldLabel><input className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.depts} onChange={(e) => setForm({ ...form, depts: e.target.value })} /></div>
-          <div><FieldLabel>Auditor</FieldLabel><input className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.auditor} onChange={(e) => setForm({ ...form, auditor: e.target.value })} /></div>
-          <div>
-            <FieldLabel>Type</FieldLabel>
-            <select className="w-full border rounded px-2 py-1.5 text-sm mb-2" style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}><option>Audit</option><option>Ceremony</option><option>Activity</option></select>
-            <button onClick={addEvent} className="w-full flex items-center justify-center gap-1 px-3 py-1.5 rounded text-xs font-semibold" style={{ backgroundColor: C.navy, color: C.cream }}><Plus size={13} /> Add event</button>
+        <div className="rounded-lg border p-5 mb-8" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
+          <div className="grid sm:grid-cols-2 md:grid-cols-6 gap-3">
+            <div><FieldLabel>From</FieldLabel><input type="date" className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
+            <div><FieldLabel>To (optional)</FieldLabel><input type="date" className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></div>
+            <div><FieldLabel>Title</FieldLabel><input className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
+            <div><FieldLabel>Departments (comma-separated)</FieldLabel><input className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.depts} onChange={(e) => setForm({ ...form, depts: e.target.value })} /></div>
+            <div><FieldLabel>Auditor</FieldLabel><input className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} value={form.auditor} onChange={(e) => setForm({ ...form, auditor: e.target.value })} /></div>
+            <div>
+              <FieldLabel>Type</FieldLabel>
+              <select className="w-full border rounded px-2 py-1.5 text-sm mb-2" style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}><option>Audit</option><option>Ceremony</option><option>Activity</option></select>
+              <button onClick={addEvent} className="w-full flex items-center justify-center gap-1 px-3 py-1.5 rounded text-xs font-semibold" style={{ backgroundColor: C.navy, color: C.cream }}><Plus size={13} /> Add event</button>
+            </div>
           </div>
+          {formError && <p className="text-xs mt-2" style={{ color: C.brick }}>{formError}</p>}
         </div>
       )}
       <div className="rounded-lg border p-2 sm:p-5" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>{sorted.map((e) => <EventRow key={e.id} e={e} editing={editing} onRemove={() => onRemoveEvent(e.id)} />)}</div>
@@ -703,7 +759,6 @@ function Rankings({ standings, monthlyWinners }) {
 function iconFor(type) { if (type === "photo") return Camera; if (type === "video") return Video; return FileText; }
 function GalleryTile({ item, editing, onDelete }) {
   const Icon = iconFor(item.file_type);
-  const monthLabel = MONTHS[new Date(item.month).getUTCMonth()];
   return (
     <div className="rounded-lg border overflow-hidden relative" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
       {editing && (
@@ -718,7 +773,7 @@ function GalleryTile({ item, editing, onDelete }) {
       )}
       <div className="h-32 flex items-center justify-center" style={{ backgroundColor: "#1a2f45" }}>
         {item.file_type === "photo" ? (
-          <img src={item.file_url} alt={item.department} className="w-full h-full object-cover" loading="lazy" />
+          <img src={item.file_url} alt={item.caption || "Gallery photo"} className="w-full h-full object-cover" loading="lazy" />
         ) : item.file_type === "video" ? (
           <video src={item.file_url} className="w-full h-full object-cover" muted />
         ) : (
@@ -728,90 +783,83 @@ function GalleryTile({ item, editing, onDelete }) {
         )}
       </div>
       <div className="p-3">
-        <div className="text-sm font-semibold" style={{ color: C.ink }}>{item.department}</div>
+        <div className="text-sm font-semibold" style={{ color: C.ink }}>{item.caption || "Untitled"}</div>
         <div className="text-xs mt-0.5 flex items-center gap-1" style={{ color: C.slate }}>
-          <Icon size={11} /> {item.file_type} · {monthLabel} {CURRENT_YEAR}
+          <Icon size={11} /> {item.file_type} · {new Date(item.uploaded_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
         </div>
       </div>
     </div>
   );
 }
-function GalleryUploadPanel({ departments, deptIdByName, onEnsureAudit, onUploaded }) {
-  const [deptName, setDeptName] = useState(departments[0] || "");
-  const [monthIdx, setMonthIdx] = useState(new Date().getMonth());
+
+function GalleryUploadPanel({ onUploaded }) {
+  const [caption, setCaption] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
 
-  const handleFile = async (e) => {
-    const file = e.target.files[0];
-    if (!file || !deptName) return;
+  const handleFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     setUploading(true); setError("");
     try {
-      const auditId = await onEnsureAudit(deptName, monthIdx);
-      await media.uploadAuditFile(auditId, file);
+      // Uploaded one at a time (not Promise.all) so progress is meaningful
+      // and one failed file doesn't abort files already queued after it.
+      for (let i = 0; i < files.length; i++) {
+        setProgress(`Uploading ${i + 1} of ${files.length}…`);
+        await galleryApi.upload(files[i], caption || null);
+      }
+      setCaption("");
       onUploaded();
     } catch (err) {
       setError(err.message || "Upload failed.");
     } finally {
       setUploading(false);
+      setProgress("");
       e.target.value = "";
     }
   };
 
   return (
     <div className="rounded-lg border p-5 mb-8 flex flex-wrap items-end gap-3" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
-      <div>
-        <FieldLabel>Department</FieldLabel>
-        <select value={deptName} onChange={(e) => setDeptName(e.target.value)} className="border rounded px-2 py-1.5 text-sm" style={inputStyle}>
-          {departments.map((d) => <option key={d}>{d}</option>)}
-        </select>
-      </div>
-      <div>
-        <FieldLabel>Month</FieldLabel>
-        <select value={monthIdx} onChange={(e) => setMonthIdx(Number(e.target.value))} className="border rounded px-2 py-1.5 text-sm" style={inputStyle}>
-          {MONTHS.map((m, i) => <option key={m} value={i}>{m} {CURRENT_YEAR}</option>)}
-        </select>
+      <div className="flex-1 min-w-[180px]">
+        <FieldLabel>Caption (optional, applies to this batch)</FieldLabel>
+        <input value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="e.g. Annual retreat, June 2026" className="w-full border rounded px-2 py-1.5 text-sm" style={inputStyle} />
       </div>
       <label className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-semibold cursor-pointer" style={{ backgroundColor: C.navy, color: C.cream }}>
         {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-        {uploading ? "Uploading…" : "Add photo, video, or report"}
-        <input type="file" accept="image/*,video/*,application/pdf" className="hidden" disabled={uploading} onChange={handleFile} />
+        {uploading ? (progress || "Uploading…") : "Add photos, videos, or reports"}
+        <input type="file" accept="image/*,video/*,application/pdf" multiple className="hidden" disabled={uploading} onChange={handleFiles} />
       </label>
       {error && <p className="text-xs w-full" style={{ color: C.brick }}>{error}</p>}
+      <p className="text-xs w-full" style={{ color: C.slate }}>Select multiple files at once to upload them all together. This gallery isn't tied to any department.</p>
     </div>
   );
 }
 
-function Gallery({ editing, departments, deptIdByName, onEnsureAudit }) {
+function Gallery({ editing }) {
   const [items, setItems] = useState(null);
   const [error, setError] = useState("");
 
   const load = () => {
-    media.listAll(CURRENT_YEAR).then(setItems).catch((err) => setError(err.message));
+    galleryApi.list().then(setItems).catch((err) => setError(err.message));
   };
   useEffect(load, []);
 
   const handleDelete = async (id) => {
-    await media.remove(id);
+    await galleryApi.remove(id);
     setItems(items.filter((i) => i.id !== id));
   };
 
   return (
     <div className="max-w-6xl mx-auto px-5 py-14">
-      <SectionEyebrow>Every audit, in view</SectionEyebrow>
+      <SectionEyebrow>A shared space for everything</SectionEyebrow>
       <h2 className="text-3xl font-bold mb-2" style={{ color: C.ink, ...fontDisplay }}>GALLERY</h2>
-      <p className="text-sm mb-6 max-w-2xl" style={{ color: C.slate }}>Real photos, videos, and reports uploaded from any department, most recent first.</p>
-      {editing && (
-        <GalleryUploadPanel
-          departments={departments}
-          deptIdByName={deptIdByName}
-          onEnsureAudit={onEnsureAudit}
-          onUploaded={load}
-        />
-      )}
+      <p className="text-sm mb-6 max-w-2xl" style={{ color: C.slate }}>Photos, videos, and reports from committee activities, ceremonies, and events — a general gallery, independent of any department.</p>
+      {editing && <GalleryUploadPanel onUploaded={load} />}
       {error && <p className="text-sm mb-4" style={{ color: C.brick }}>Couldn't load the gallery: {error}</p>}
       {!items && !error && <p className="text-sm" style={{ color: C.slate }}>Loading…</p>}
-      {items && items.length === 0 && <p className="text-sm" style={{ color: C.slate }}>No media uploaded yet this year — use the panel above (or the Performance page) to add photos, videos, or reports.</p>}
+      {items && items.length === 0 && <p className="text-sm" style={{ color: C.slate }}>No media uploaded yet — use the panel above to add photos, videos, or reports.</p>}
       {items && items.length > 0 && (
         <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-5">
           {items.map((it) => <GalleryTile key={it.id} item={it} editing={editing} onDelete={() => handleDelete(it.id)} />)}
@@ -872,12 +920,8 @@ export default function App() {
   const deptNameById = useMemo(() => Object.fromEntries(deptRows.map((d) => [d.id, d.name])), [deptRows]);
   const memberNameById = useMemo(() => Object.fromEntries(committeeRows.map((c) => [c.id, c.name])), [committeeRows]);
 
-  const committeeLead = useMemo(
-    () => committeeRows.filter((c) => c.is_lead).map((c) => shapeMember(c, deptNameById)),
-    [committeeRows, deptNameById]
-  );
-  const auditors = useMemo(
-    () => committeeRows.filter((c) => !c.is_lead).map((c) => shapeMember(c, deptNameById)),
+  const committeeMembers = useMemo(
+    () => sortByHierarchy(committeeRows.map((c) => shapeMember(c, deptNameById))),
     [committeeRows, deptNameById]
   );
 
@@ -926,7 +970,7 @@ export default function App() {
         const nameById = Object.fromEntries(committeeList.map((c) => [c.id, c.name]));
         const deptNameByIdLocal = Object.fromEntries(deptList.map((d) => [d.id, d.name]));
         setEvents(eventRows.map((e) => ({
-          id: e.id, date: e.event_date, title: e.title, type: e.event_type,
+          id: e.id, date: toDateOnly(e.event_date), endDate: toDateOnly(e.end_date), title: e.title, type: e.event_type,
           depts: (e.department_ids || []).map((id) => deptNameByIdLocal[id]).filter(Boolean),
           auditor: nameById[e.auditor_id] || "—",
         })));
@@ -972,19 +1016,20 @@ export default function App() {
   };
 
   /* ------------------------------- Committee -------------------------------- */
-  async function syncCommittee(oldArr, newArr, isLead) {
+  async function syncCommittee(oldArr, newArr) {
     setSaving(true);
     const oldIds = new Set(oldArr.map((p) => p.id));
     const newIds = new Set(newArr.map((p) => p.id));
     for (const p of oldArr) if (!newIds.has(p.id)) await committeeApi.remove(p.id);
     for (const p of newArr) {
       const attached_departments = (p.attached || []).map((n) => deptIdByName[n]).filter(Boolean);
+      const is_lead = !isAuditorRole(p.role);
       if (!oldIds.has(p.id)) {
-        await committeeApi.create({ name: p.name, role: p.role, photo_url: p.photo, is_lead: isLead, attached_departments });
+        await committeeApi.create({ name: p.name, role: p.role, photo_url: p.photo, is_lead, attached_departments });
       } else {
         const prev = oldArr.find((o) => o.id === p.id);
         if (prev && (prev.name !== p.name || prev.role !== p.role || prev.photo !== p.photo || JSON.stringify(prev.attached) !== JSON.stringify(p.attached))) {
-          await committeeApi.update(p.id, { name: p.name, role: p.role, photo_url: p.photo, attached_departments });
+          await committeeApi.update(p.id, { name: p.name, role: p.role, photo_url: p.photo, is_lead, attached_departments });
         }
       }
     }
@@ -996,13 +1041,13 @@ export default function App() {
   const handleAddEvent = async (form) => {
     setSaving(true);
     await eventsApi.create({
-      title: form.title, event_date: form.date, event_type: form.type,
+      title: form.title, event_date: form.date, end_date: form.endDate || null, event_type: form.type,
       department_ids: form.depts.map((n) => deptIdByName[n]).filter(Boolean),
       auditor_id: null,
     });
     const fresh = await eventsApi.list();
     setEvents(fresh.map((e) => ({
-      id: e.id, date: e.event_date, title: e.title, type: e.event_type,
+      id: e.id, date: toDateOnly(e.event_date), endDate: toDateOnly(e.end_date), title: e.title, type: e.event_type,
       depts: (e.department_ids || []).map((id) => deptNameById[id]).filter(Boolean),
       auditor: memberNameById[e.auditor_id] || "—",
     })));
@@ -1083,9 +1128,8 @@ export default function App() {
       case "committee":
         return (
           <Committee
-            committeeLead={committeeLead} auditors={auditors} departments={departments} editing={editing}
-            onSaveLead={(next) => syncCommittee(committeeLead, next, true)}
-            onSaveAuditors={(next) => syncCommittee(auditors, next, false)}
+            members={committeeMembers} departments={departments} editing={editing}
+            onSaveMembers={(next) => syncCommittee(committeeMembers, next)}
             onAddDept={handleAddDept} onRenameDept={handleRenameDept} onRemoveDept={handleRemoveDept}
           />
         );
@@ -1096,11 +1140,11 @@ export default function App() {
       case "rankings":
         return <Rankings standings={standings} monthlyWinners={monthlyWinners} />;
       case "gallery":
-        return <Gallery editing={editing} departments={departments} deptIdByName={deptIdByName} onEnsureAudit={handleEnsureAudit} />;
+        return <Gallery editing={editing} />;
       default:
         return <Home setActive={setActive} standings={standings} latestMonthLabel={latestMonthLabel} departments={departments} siteSettings={siteSettings} editing={editing} />;
     }
-  }, [active, committeeLead, auditors, scores, auditIds, events, editing, standings, monthlyWinners, latestMonthLabel, departments, siteSettings]);
+  }, [active, committeeMembers, scores, auditIds, events, editing, standings, monthlyWinners, latestMonthLabel, departments, siteSettings]);
 
   if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.cream }}><Loader2 className="animate-spin" size={28} color={C.navy} /></div>;
 

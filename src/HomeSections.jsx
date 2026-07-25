@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Quote, Trophy, Upload, Loader2, Camera } from "lucide-react";
-import { settings as settingsApi, media } from "./api";
+import { settings as settingsApi, media, gallery as galleryApi } from "./api";
 
 const avatarUrl = (name) =>
   `https://ui-avatars.com/api/?name=${encodeURIComponent(name || "Kaizen")}&background=0F2740&color=F2A93B&size=256&bold=true`;
@@ -257,7 +257,7 @@ export function GalleryMarquee({ colors }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    media.listAll(new Date().getFullYear())
+    galleryApi.list()
       .then((rows) => setItems(rows.filter((r) => r.file_type === "photo" || r.file_type === "video").slice(0, 20)))
       .catch((err) => setError(err.message));
   }, []);
@@ -283,11 +283,13 @@ export function GalleryMarquee({ colors }) {
               {m.file_type === "video" ? (
                 <video src={m.file_url} className="w-full h-full object-cover" muted loop autoPlay playsInline />
               ) : (
-                <img src={m.file_url} alt={m.department} className="w-full h-full object-cover" loading="lazy" />
+                <img src={m.file_url} alt={m.caption || "Gallery photo"} className="w-full h-full object-cover" loading="lazy" />
               )}
-              <div className="absolute bottom-0 left-0 right-0 px-2 py-1" style={{ background: "linear-gradient(transparent, rgba(0,0,0,0.7))" }}>
-                <span className="text-[10px] font-semibold" style={{ color: "#F4F5F0" }}>{m.department}</span>
-              </div>
+              {m.caption && (
+                <div className="absolute bottom-0 left-0 right-0 px-2 py-1" style={{ background: "linear-gradient(transparent, rgba(0,0,0,0.7))" }}>
+                  <span className="text-[10px] font-semibold" style={{ color: "#F4F5F0" }}>{m.caption}</span>
+                </div>
+              )}
             </div>
           ))}
         </div>
