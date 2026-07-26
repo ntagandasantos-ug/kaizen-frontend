@@ -9,7 +9,7 @@
 //      effect (like a logo cloud or testimonial carousel). Read-only.
 
 import { useState, useEffect, useRef } from "react";
-import { Quote, Trophy, Upload, Loader2, Camera } from "lucide-react";
+import { Quote, Trophy, Upload, Loader2, Camera, X, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { settings as settingsApi, media, gallery as galleryApi } from "./api";
 
 const avatarUrl = (name) =>
@@ -185,10 +185,136 @@ function PhotoUploadButton({ label, onUploaded, uploadFn }) {
 // Continuous horizontal scroll — the classic "modern website" logo-cloud /
 // testimonial-strip effect. Pure CSS animation (translateX loop), pauses on
 // hover, and duplicates the media list so the loop has no visible seam.
+/* ------------------------------ Media Lightbox ----------------------------- */
+// A fullscreen viewer used by both marquees and the Gallery page. Click a
+// photo/video to open it, swipe (touch) or click the arrow buttons (mouse)
+// to browse the rest of the set, and download the file that's showing.
+export function MediaLightbox({ items, startIndex = 0, onClose }) {
+  const [index, setIndex] = useState(startIndex);
+  const [downloading, setDownloading] = useState(false);
+  const touchStartX = useRef(null);
+
+  const next = () => setIndex((i) => (i + 1) % items.length);
+  const prev = () => setIndex((i) => (i - 1 + items.length) % items.length);
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight") next();
+      else if (e.key === "ArrowLeft") prev();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [items.length]);
+
+  const onTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
+  const onTouchEnd = (e) => {
+    if (touchStartX.current === null) return;
+    const delta = e.changedTouches[0].clientX - touchStartX.current;
+    if (delta > 50) prev();
+    else if (delta < -50) next();
+    touchStartX.current = null;
+  };
+
+  const item = items[index];
+  if (!item) return null;
+
+  const handleDownload = async (e) => {
+    e.stopPropagation();
+    setDownloading(true);
+    try {
+      // Fetching as a blob (instead of a plain <a download> link) forces an
+      // actual download even for cross-origin R2/S3 URLs, which otherwise
+      // often just open in a new tab instead of saving.
+      const res = await fetch(item.file_url);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = (item.caption || item.department || "kaizen-media").replace(/\s+/g, "-");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      window.open(item.file_url, "_blank");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+      style={{ backgroundColor: "rgba(10,27,46,0.95)" }}
+      onClick={onClose}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+    >
+      <button
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        className="absolute top-4 right-4 p-2 rounded-full"
+        style={{ color: "#F4F5F0", backgroundColor: "rgba(255,255,255,0.12)" }}
+        aria-label="Close"
+      >
+        <X size={22} />
+      </button>
+
+      {items.length > 1 && (
+        <>
+          <button
+            onClick={(e) => { e.stopPropagation(); prev(); }}
+            className="absolute left-2 sm:left-6 top-1/2 -translate-y-1/2 p-2 rounded-full hidden sm:flex"
+            style={{ color: "#F4F5F0", backgroundColor: "rgba(255,255,255,0.12)" }}
+            aria-label="Previous"
+          >
+            <ChevronLeft size={26} />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); next(); }}
+            className="absolute right-2 sm:right-6 top-1/2 -translate-y-1/2 p-2 rounded-full hidden sm:flex"
+            style={{ color: "#F4F5F0", backgroundColor: "rgba(255,255,255,0.12)" }}
+            aria-label="Next"
+          >
+            <ChevronRight size={26} />
+          </button>
+        </>
+      )}
+
+      <div className="max-w-4xl max-h-[85vh] w-full" onClick={(e) => e.stopPropagation()}>
+        {item.file_type === "video" ? (
+          <video src={item.file_url} className="w-full max-h-[72vh] rounded-lg mx-auto" controls autoPlay />
+        ) : (
+          <img src={item.file_url} alt={item.caption || item.department || "Media"} className="w-full max-h-[72vh] object-contain rounded-lg mx-auto" />
+        )}
+        <div className="flex items-center justify-between mt-3 px-1 flex-wrap gap-2">
+          <div className="text-sm" style={{ color: "rgba(244,245,240,0.85)" }}>
+            {item.caption || item.department || ""}
+            {items.length > 1 && (
+              <span className="ml-2 text-xs" style={fontMono}>{index + 1} / {items.length}</span>
+            )}
+          </div>
+          <button
+            onClick={handleDownload}
+            disabled={downloading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold"
+            style={{ backgroundColor: "#F2A93B", color: "#0F2740" }}
+          >
+            {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            {downloading ? "Downloading…" : "Download"}
+          </button>
+        </div>
+        <p className="sm:hidden text-center text-xs mt-2" style={{ color: "rgba(244,245,240,0.5)" }}>Swipe left or right to browse</p>
+      </div>
+    </div>
+  );
+}
+
 export function WinnersMarquee({ colors }) {
   const C = colors;
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [lightboxIndex, setLightboxIndex] = useState(null);
   const trackRef = useRef(null);
 
   useEffect(() => {
@@ -215,20 +341,21 @@ export function WinnersMarquee({ colors }) {
         <div
           ref={trackRef}
           className="flex gap-4 w-max marquee-track"
-          style={{ animation: "marqueeScroll 28s linear infinite" }}
+          style={{ animation: "marqueeScroll 70s linear infinite" }}
         >
           {looped.map((m, i) => (
-            <div
+            <button
               key={`${m.id}-${i}`}
-              className="rounded-lg overflow-hidden shrink-0"
+              onClick={() => setLightboxIndex(i % files.length)}
+              className="rounded-lg overflow-hidden shrink-0 cursor-pointer"
               style={{ width: 220, height: 150, backgroundColor: "#1a2f45" }}
             >
               {m.file_type === "video" ? (
-                <video src={m.file_url} className="w-full h-full object-cover" muted loop autoPlay playsInline />
+                <video src={m.file_url} className="w-full h-full object-cover pointer-events-none" muted loop autoPlay playsInline />
               ) : (
-                <img src={m.file_url} alt={winner.department} className="w-full h-full object-cover" loading="lazy" />
+                <img src={m.file_url} alt={winner.department} className="w-full h-full object-cover pointer-events-none" loading="lazy" />
               )}
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -243,6 +370,14 @@ export function WinnersMarquee({ colors }) {
           .marquee-track { animation: none !important; }
         }
       `}</style>
+
+      {lightboxIndex !== null && (
+        <MediaLightbox
+          items={files.map((f) => ({ ...f, department: winner.department }))}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </div>
   );
 }
@@ -255,6 +390,7 @@ export function GalleryMarquee({ colors }) {
   const C = colors;
   const [items, setItems] = useState(null);
   const [error, setError] = useState("");
+  const [lightboxIndex, setLightboxIndex] = useState(null);
 
   useEffect(() => {
     galleryApi.list()
@@ -277,20 +413,25 @@ export function GalleryMarquee({ colors }) {
       </div>
 
       <div className="overflow-hidden w-full" style={{ maskImage: "linear-gradient(90deg, transparent, black 8%, black 92%, transparent)" }}>
-        <div className="flex gap-4 w-max marquee-track-reverse" style={{ animation: "marqueeScrollReverse 34s linear infinite" }}>
+        <div className="flex gap-4 w-max marquee-track-reverse" style={{ animation: "marqueeScrollReverse 85s linear infinite" }}>
           {looped.map((m, i) => (
-            <div key={`${m.id}-${i}`} className="rounded-lg overflow-hidden shrink-0 relative" style={{ width: 220, height: 150, backgroundColor: "#0A1B2E" }}>
+            <button
+              key={`${m.id}-${i}`}
+              onClick={() => setLightboxIndex(i % items.length)}
+              className="rounded-lg overflow-hidden shrink-0 relative cursor-pointer"
+              style={{ width: 220, height: 150, backgroundColor: "#0A1B2E" }}
+            >
               {m.file_type === "video" ? (
-                <video src={m.file_url} className="w-full h-full object-cover" muted loop autoPlay playsInline />
+                <video src={m.file_url} className="w-full h-full object-cover pointer-events-none" muted loop autoPlay playsInline />
               ) : (
-                <img src={m.file_url} alt={m.caption || "Gallery photo"} className="w-full h-full object-cover" loading="lazy" />
+                <img src={m.file_url} alt={m.caption || "Gallery photo"} className="w-full h-full object-cover pointer-events-none" loading="lazy" />
               )}
               {m.caption && (
                 <div className="absolute bottom-0 left-0 right-0 px-2 py-1" style={{ background: "linear-gradient(transparent, rgba(0,0,0,0.7))" }}>
                   <span className="text-[10px] font-semibold" style={{ color: "#F4F5F0" }}>{m.caption}</span>
                 </div>
               )}
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -305,6 +446,14 @@ export function GalleryMarquee({ colors }) {
           .marquee-track-reverse { animation: none !important; }
         }
       `}</style>
+
+      {lightboxIndex !== null && (
+        <MediaLightbox
+          items={items}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </div>
   );
 }

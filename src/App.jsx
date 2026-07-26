@@ -7,7 +7,7 @@ import {
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
-import { LeadershipFlipCard, WinnersMarquee, GalleryMarquee } from "./HomeSections";
+import { LeadershipFlipCard, WinnersMarquee, GalleryMarquee, MediaLightbox } from "./HomeSections";
 import {
   auth, departments as departmentsApi, committee as committeeApi,
   audits as auditsApi, events as eventsApi, media, settings as settingsApi,
@@ -757,8 +757,9 @@ function Rankings({ standings, monthlyWinners }) {
 
 /* ================================= GALLERY =================================== */
 function iconFor(type) { if (type === "photo") return Camera; if (type === "video") return Video; return FileText; }
-function GalleryTile({ item, editing, onDelete }) {
+function GalleryTile({ item, editing, onDelete, onOpen }) {
   const Icon = iconFor(item.file_type);
+  const isViewable = item.file_type === "photo" || item.file_type === "video";
   return (
     <div className="rounded-lg border overflow-hidden relative" style={{ borderColor: C.hairline, backgroundColor: C.paper }}>
       {editing && (
@@ -771,17 +772,21 @@ function GalleryTile({ item, editing, onDelete }) {
           <Trash2 size={13} />
         </button>
       )}
-      <div className="h-32 flex items-center justify-center" style={{ backgroundColor: "#1a2f45" }}>
-        {item.file_type === "photo" ? (
-          <img src={item.file_url} alt={item.caption || "Gallery photo"} className="w-full h-full object-cover" loading="lazy" />
-        ) : item.file_type === "video" ? (
-          <video src={item.file_url} className="w-full h-full object-cover" muted />
-        ) : (
+      {isViewable ? (
+        <button onClick={onOpen} className="w-full h-32 flex items-center justify-center cursor-pointer" style={{ backgroundColor: "#1a2f45" }}>
+          {item.file_type === "photo" ? (
+            <img src={item.file_url} alt={item.caption || "Gallery photo"} className="w-full h-full object-cover" loading="lazy" />
+          ) : (
+            <video src={item.file_url} className="w-full h-full object-cover" muted />
+          )}
+        </button>
+      ) : (
+        <div className="h-32 flex items-center justify-center" style={{ backgroundColor: "#1a2f45" }}>
           <a href={item.file_url} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1" style={{ color: C.cream }}>
             <Icon size={26} /><span className="text-[11px] uppercase tracking-wide" style={fontMono}>Open report</span>
           </a>
-        )}
-      </div>
+        </div>
+      )}
       <div className="p-3">
         <div className="text-sm font-semibold" style={{ color: C.ink }}>{item.caption || "Untitled"}</div>
         <div className="text-xs mt-0.5 flex items-center gap-1" style={{ color: C.slate }}>
@@ -840,6 +845,7 @@ function GalleryUploadPanel({ onUploaded }) {
 function Gallery({ editing }) {
   const [items, setItems] = useState(null);
   const [error, setError] = useState("");
+  const [lightboxIndex, setLightboxIndex] = useState(null);
 
   const load = () => {
     galleryApi.list().then(setItems).catch((err) => setError(err.message));
@@ -851,19 +857,39 @@ function Gallery({ editing }) {
     setItems(items.filter((i) => i.id !== id));
   };
 
+  // Only photos/videos are swipeable in the lightbox — reports open in a new
+  // tab directly from their tile instead. This list is what "index N of M"
+  // counts against, and what left/right swipe cycles through.
+  const viewableItems = (items || []).filter((i) => i.file_type === "photo" || i.file_type === "video");
+
   return (
     <div className="max-w-6xl mx-auto px-5 py-14">
       <SectionEyebrow>A shared space for everything</SectionEyebrow>
       <h2 className="text-3xl font-bold mb-2" style={{ color: C.ink, ...fontDisplay }}>GALLERY</h2>
-      <p className="text-sm mb-6 max-w-2xl" style={{ color: C.slate }}>Photos, videos, and reports from committee activities, ceremonies, and events — a general gallery, independent of any department.</p>
+      <p className="text-sm mb-6 max-w-2xl" style={{ color: C.slate }}>Photos, videos, and reports from committee activities, ceremonies, and events — a general gallery, independent of any department. Tap a photo or video to view it full-screen.</p>
       {editing && <GalleryUploadPanel onUploaded={load} />}
       {error && <p className="text-sm mb-4" style={{ color: C.brick }}>Couldn't load the gallery: {error}</p>}
       {!items && !error && <p className="text-sm" style={{ color: C.slate }}>Loading…</p>}
       {items && items.length === 0 && <p className="text-sm" style={{ color: C.slate }}>No media uploaded yet — use the panel above to add photos, videos, or reports.</p>}
       {items && items.length > 0 && (
         <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-5">
-          {items.map((it) => <GalleryTile key={it.id} item={it} editing={editing} onDelete={() => handleDelete(it.id)} />)}
+          {items.map((it) => (
+            <GalleryTile
+              key={it.id}
+              item={it}
+              editing={editing}
+              onDelete={() => handleDelete(it.id)}
+              onOpen={() => setLightboxIndex(viewableItems.findIndex((v) => v.id === it.id))}
+            />
+          ))}
         </div>
+      )}
+      {lightboxIndex !== null && lightboxIndex >= 0 && (
+        <MediaLightbox
+          items={viewableItems}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
       )}
     </div>
   );
