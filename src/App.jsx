@@ -901,22 +901,12 @@ function Gallery({ editing }) {
 }
 
 /* =================================== FOOTER ==================================== */
-function Footer({ latestMonthLabel, siteSettings, editing, onSaveSiteSettings }) {
-  const [draft, setDraft] = useState(siteSettings.footerText || "");
-  const [prevFooterText, setPrevFooterText] = useState(siteSettings.footerText || "");
-  if ((siteSettings.footerText || "") !== prevFooterText) {
-    setPrevFooterText(siteSettings.footerText || "");
-    setDraft(siteSettings.footerText || "");
-  }
+function Footer({ latestMonthLabel }) {
   return (
     <footer style={{ backgroundColor: C.navyDeep }}>
-      <div className="max-w-6xl mx-auto px-5 py-8 flex flex-col sm:flex-row items-center justify-between gap-3">
-        {editing ? (
-          <input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={() => onSaveSiteSettings({ ...siteSettings, footerText: draft })} className="text-sm bg-transparent border-b flex-1 max-w-md" style={{ color: "rgba(244,245,240,0.8)", borderColor: "rgba(244,245,240,0.3)" }} />
-        ) : (
-          <div className="text-sm" style={{ color: "rgba(244,245,240,0.6)" }}>{siteSettings.footerText || "Kaizen Committee"}</div>
-        )}
+      <div className="max-w-6xl mx-auto px-5 py-8 flex flex-col items-center gap-1.5">
         <div className="text-xs flex items-center gap-1.5" style={{ color: "rgba(244,245,240,0.4)" }}><Clock size={12} /> Standings last updated {latestMonthLabel}</div>
+        <div className="text-xs" style={{ color: "rgba(244,245,240,0.5)" }}>Powered by: SantosInfographics © 2026. All Rights Reserved</div>
       </div>
     </footer>
   );
@@ -1193,7 +1183,7 @@ export default function App() {
         siteSettings={siteSettings} onSaveSiteSettings={handleSaveSiteSettings}
       />
       {view}
-      <Footer latestMonthLabel={latestMonthLabel} siteSettings={siteSettings} editing={editing} onSaveSiteSettings={handleSaveSiteSettings} />
+      <Footer latestMonthLabel={latestMonthLabel} />
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} onSubmit={handleLogin} error={loginError} />}
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} onSubmit={handleChangePassword} error={changePwError} success={changePwSuccess} />}
     </div>
