@@ -180,9 +180,14 @@ function Nav({ active, setActive, editing, authed, saving, onEditClick, onLogout
       <div className="max-w-6xl mx-auto px-5 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           {draft.logo ? (
-            <img src={draft.logo} alt="logo" className="w-9 h-9 rounded object-cover" style={{ backgroundColor: C.amber }} />
+            <img
+              src={draft.logo}
+              alt="logo"
+              className="w-12 h-12 md:w-16 md:h-16 rounded object-contain p-1 transition-all duration-200"
+              style={{ backgroundColor: C.amber }}
+            />
           ) : (
-            <div className="w-9 h-9 rounded flex items-center justify-center font-bold" style={{ backgroundColor: C.amber, color: C.navy, ...fontDisplay }}>改</div>
+            <div className="w-12 h-12 md:w-16 md:h-16 rounded flex items-center justify-center font-bold transition-all duration-200" style={{ backgroundColor: C.amber, color: C.navy, ...fontDisplay, fontSize: "1.5rem" }}>改</div>
           )}
           {editing ? (
             <div>
